@@ -325,6 +325,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_eagle3(params);
         case LLM_ARCH_DFLASH:
             return new llama_model_dflash(params);
+        case LLM_ARCH_DSPARK:
+            return new llama_model_dspark(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -2799,6 +2801,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DFLASH:
             // DSV4 DSpark drafters use DeepSeek-V4's normal RoPE; legacy DFlash backbones are NeoX
             return model->hparams.dsv4_hc_mult > 0 ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
+
+        case LLM_ARCH_DSPARK:
+            return LLAMA_ROPE_TYPE_NORM;
 
         case LLM_ARCH_QWEN2VL:
         case LLM_ARCH_PADDLEOCR:
