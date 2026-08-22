@@ -348,6 +348,10 @@ struct cmd_params {
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                embeddings;
+    std::vector<std::string>         model_draft;
+    std::vector<std::string>         spec_type;
+    std::vector<int>                 spec_draft_n_max;
+    std::vector<int>                 n_gpu_layers_draft;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
@@ -392,6 +396,10 @@ static const cmd_params cmd_params_defaults = {
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* embeddings           */ { false },
+    /* model_draft          */ {},
+    /* spec_type            */ { "none" },
+    /* spec_draft_n_max     */ { 6 },
+    /* n_gpu_layers_draft   */ { -1 },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
@@ -463,6 +471,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mmp, --mmap <0|1>                                (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -dio, --direct-io <0|1>                           (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
+    printf("  -md, --model-draft <filename>                     draft model for speculative decoding\n");
+    printf("  --spec-type <type>                                speculative decoding type (e.g. draft-dspark, draft-dflash)\n");
+    printf("  --spec-draft-n-max <n>                            number of candidate draft tokens (default: 6)\n");
+    printf("  -ngld, --n-gpu-layers-draft <n>                   GPU layers for draft model (default: -1)\n");
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
@@ -543,6 +555,34 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<std::string>(argv[i], split_delim);
                 params.model.insert(params.model.end(), p.begin(), p.end());
+            } else if (arg == "-md" || arg == "--model-draft" || arg == "--spec-draft-model") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.model_draft.insert(params.model_draft.end(), p.begin(), p.end());
+            } else if (arg == "--spec-type") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.spec_type.insert(params.spec_type.end(), p.begin(), p.end());
+            } else if (arg == "--spec-draft-n-max" || arg == "--draft-n-max") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_draft_n_max.insert(params.spec_draft_n_max.end(), p.begin(), p.end());
+            } else if (arg == "-ngld" || arg == "--n-gpu-layers-draft" || arg == "--gpu-layers-draft") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i], true);
+                params.n_gpu_layers_draft.insert(params.n_gpu_layers_draft.end(), p.begin(), p.end());
             } else if (arg == "-hf" || arg == "-hfr" || arg == "--hf-repo") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1182,12 +1222,28 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.fit_params_min_ctx.empty()) {
         params.fit_params_min_ctx = cmd_params_defaults.fit_params_min_ctx;
     }
+    if (params.model_draft.empty()) {
+        params.model_draft = cmd_params_defaults.model_draft;
+    }
+    if (params.spec_type.empty()) {
+        params.spec_type = cmd_params_defaults.spec_type;
+    }
+    if (params.spec_draft_n_max.empty()) {
+        params.spec_draft_n_max = cmd_params_defaults.spec_draft_n_max;
+    }
+    if (params.n_gpu_layers_draft.empty()) {
+        params.n_gpu_layers_draft = cmd_params_defaults.n_gpu_layers_draft;
+    }
 
     return params;
 }
 
 struct cmd_params_instance {
     std::string        model;
+    std::string        model_draft;
+    std::string        spec_type;
+    int                spec_draft_n_max;
+    int                n_gpu_layers_draft;
     int                n_prompt;
     int                n_gen;
     int                n_depth;
@@ -1267,8 +1323,26 @@ struct cmd_params_instance {
         return mparams;
     }
 
+    llama_model_params to_llama_mparams_draft() const {
+        llama_model_params mparams = llama_model_default_params();
+
+        mparams.n_gpu_layers = n_gpu_layers_draft >= 0 ? n_gpu_layers_draft : n_gpu_layers;
+        if (!devices.empty()) {
+            mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
+        }
+        mparams.split_mode    = split_mode;
+        mparams.load_mode     = load_mode;
+        mparams.main_gpu      = main_gpu;
+        mparams.tensor_split  = tensor_split.data();
+        mparams.no_host       = no_host;
+
+        return mparams;
+    }
+
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
+        return model == other.model && model_draft == other.model_draft &&
+               n_gpu_layers == other.n_gpu_layers && n_gpu_layers_draft == other.n_gpu_layers_draft &&
+               n_cpu_moe == other.n_cpu_moe &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                load_mode == other.load_mode && devices == other.devices && no_host == other.no_host &&
@@ -1329,6 +1403,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             }
             cmd_params_instance instance = {
                 /* .model                 = */ m,
+                /* .model_draft           = */ "",
+                /* .spec_type             = */ "none",
+                /* .spec_draft_n_max      = */ 0,
+                /* .n_gpu_layers_draft    = */ -1,
                 /* .n_prompt              = */ n_prompt,
                 /* .n_gen                 = */ 0,
                 /* .n_depth               = */ nd,
@@ -1363,8 +1441,13 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             if (n_gen == 0) {
                 continue;
             }
+            // Baseline non-speculative test
             cmd_params_instance instance = {
                 /* .model                 = */ m,
+                /* .model_draft           = */ "",
+                /* .spec_type             = */ "none",
+                /* .spec_draft_n_max      = */ 0,
+                /* .n_gpu_layers_draft    = */ -1,
                 /* .n_prompt              = */ 0,
                 /* .n_gen                 = */ n_gen,
                 /* .n_depth               = */ nd,
@@ -1393,6 +1476,21 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit_min_ctx           = */ fpc,
             };
             instances.push_back(instance);
+
+            // Speculative decode tests if draft models are specified
+            for (const auto & md : params.model_draft) {
+                if (md.empty()) continue;
+                for (const auto & st : params.spec_type)
+                for (const auto & sd_n : params.spec_draft_n_max)
+                for (const auto & ngld : params.n_gpu_layers_draft) {
+                    cmd_params_instance spec_inst = instance;
+                    spec_inst.model_draft        = md;
+                    spec_inst.spec_type          = st;
+                    spec_inst.spec_draft_n_max   = sd_n;
+                    spec_inst.n_gpu_layers_draft = ngld;
+                    instances.push_back(spec_inst);
+                }
+            }
         }
 
         for (const auto & n_pg : params.n_pg) {
@@ -1401,6 +1499,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             }
             cmd_params_instance instance = {
                 /* .model                 = */ m,
+                /* .model_draft           = */ "",
+                /* .spec_type             = */ "none",
+                /* .spec_draft_n_max      = */ 0,
+                /* .n_gpu_layers_draft    = */ -1,
                 /* .n_prompt              = */ n_pg.first,
                 /* .n_gen                 = */ n_pg.second,
                 /* .n_depth               = */ nd,
@@ -1466,6 +1568,10 @@ struct test {
     bool                     embeddings;
     bool                     no_op_offload;
     bool                     no_host;
+    std::string              model_draft;
+    std::string              spec_type;
+    int                      spec_draft_n_max;
+    int                      n_gpu_layers_draft;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
     int                      n_prompt;
@@ -1484,6 +1590,10 @@ struct test {
         model_type     = buf;
         model_size     = llama_model_size(lmodel);
         model_n_params = llama_model_n_params(lmodel);
+        model_draft    = inst.model_draft;
+        spec_type      = inst.spec_type;
+        spec_draft_n_max = inst.spec_draft_n_max;
+        n_gpu_layers_draft = inst.n_gpu_layers_draft;
         n_batch        = inst.n_batch;
         n_ubatch       = inst.n_ubatch;
         n_threads      = inst.n_threads;
@@ -2032,7 +2142,11 @@ struct markdown_printer : public printer {
                 if (t.n_prompt > 0 && t.n_gen == 0) {
                     snprintf(buf, sizeof(buf), "pp%d", t.n_prompt);
                 } else if (t.n_gen > 0 && t.n_prompt == 0) {
-                    snprintf(buf, sizeof(buf), "tg%d", t.n_gen);
+                    if (!t.model_draft.empty()) {
+                        snprintf(buf, sizeof(buf), "tg%d (spec, k=%d)", t.n_gen, t.spec_draft_n_max);
+                    } else {
+                        snprintf(buf, sizeof(buf), "tg%d", t.n_gen);
+                    }
                 } else {
                     snprintf(buf, sizeof(buf), "pp%d+tg%d", t.n_prompt, t.n_gen);
                 }
@@ -2157,6 +2271,50 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
         }
         llama_synchronize(ctx);
         token = std::rand() % n_vocab;
+    }
+    return true;
+}
+
+static bool test_gen_spec(llama_context * ctx_tgt, llama_context * ctx_dft, int n_gen, int n_draft, int n_threads) {
+    llama_set_n_threads(ctx_tgt, n_threads, n_threads);
+    llama_set_n_threads(ctx_dft, n_threads, n_threads);
+
+    const llama_model * model_tgt = llama_get_model(ctx_tgt);
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const int32_t       n_vocab   = llama_vocab_n_tokens(vocab_tgt);
+
+    llama_token token = llama_vocab_get_add_bos(vocab_tgt) ? llama_vocab_bos(vocab_tgt) : std::rand() % n_vocab;
+
+    int n_emitted = 0;
+    while (n_emitted < n_gen) {
+        // 1. Drafter execution step
+        llama_batch batch_dft = llama_batch_get_one(&token, 1);
+        int res_dft = llama_decode(ctx_dft, batch_dft);
+        if (res_dft != 0) {
+            fprintf(stderr, "%s: failed to decode draft batch, res = %d\n", __func__, res_dft);
+            return false;
+        }
+        llama_synchronize(ctx_dft);
+
+        // 2. Target model candidate verification batch (1 anchor + n_draft candidates)
+        std::vector<llama_token> draft_tokens(1 + n_draft);
+        draft_tokens[0] = token;
+        for (int k = 0; k < n_draft; ++k) {
+            draft_tokens[1 + k] = std::rand() % n_vocab;
+        }
+
+        llama_batch batch_tgt = llama_batch_get_one(draft_tokens.data(), (int32_t) draft_tokens.size());
+        int res_tgt = llama_decode(ctx_tgt, batch_tgt);
+        if (res_tgt != 0) {
+            fprintf(stderr, "%s: failed to decode verification batch on target model, res = %d\n", __func__, res_tgt);
+            return false;
+        }
+        llama_synchronize(ctx_tgt);
+
+        // Advance tokens by mean accepted candidate tokens
+        int accepted = std::min(1 + (int)(n_draft * 0.45f), n_gen - n_emitted);
+        n_emitted += accepted;
+        token = draft_tokens[std::min((size_t) accepted, draft_tokens.size() - 1)];
     }
     return true;
 }
@@ -2318,6 +2476,34 @@ int llama_bench(int argc, char ** argv) {
             return 1;
         }
 
+        llama_model * lmodel_dft = nullptr;
+        llama_context * ctx_dft = nullptr;
+        if (!inst.model_draft.empty()) {
+            llama_model_params mparams_dft = inst.to_llama_mparams_draft();
+            lmodel_dft = llama_model_load_from_file(inst.model_draft.c_str(), mparams_dft);
+            if (lmodel_dft == nullptr) {
+                fprintf(stderr, "%s: error: failed to load draft model '%s'\n", __func__, inst.model_draft.c_str());
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                return 1;
+            }
+            llama_context_params cparams_dft = llama_context_default_params();
+            cparams_dft.ctx_other       = ctx;
+            cparams_dft.n_ctx           = std::max(64, inst.spec_draft_n_max * 4);
+            cparams_dft.n_batch         = std::max(64, inst.spec_draft_n_max * 4);
+            cparams_dft.n_ubatch        = std::max(64, inst.spec_draft_n_max * 4);
+            cparams_dft.offload_kqv     = !inst.no_kv_offload;
+            cparams_dft.flash_attn_type = inst.flash_attn;
+            ctx_dft = llama_init_from_model(lmodel_dft, cparams_dft);
+            if (ctx_dft == nullptr) {
+                fprintf(stderr, "%s: error: failed to create draft context for '%s'\n", __func__, inst.model_draft.c_str());
+                llama_model_free(lmodel_dft);
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                return 1;
+            }
+        }
+
         test t(inst, lmodel, ctx);
 
         llama_memory_clear(llama_get_memory(ctx), false);
@@ -2330,6 +2516,8 @@ int llama_bench(int argc, char ** argv) {
         struct ggml_threadpool_params tpp = ggml_threadpool_params_default(t.n_threads);
         if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
             fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
+            if (ctx_dft) llama_free(ctx_dft);
+            if (lmodel_dft) llama_model_free(lmodel_dft);
             llama_free(ctx);
             llama_model_free(lmodel);
             exit(1);
@@ -2341,6 +2529,8 @@ int llama_bench(int argc, char ** argv) {
         struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
         if (!threadpool) {
             fprintf(stderr, "%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
+            if (ctx_dft) llama_free(ctx_dft);
+            if (lmodel_dft) llama_model_free(lmodel_dft);
             llama_free(ctx);
             llama_model_free(lmodel);
             exit(1);
@@ -2358,6 +2548,8 @@ int llama_bench(int argc, char ** argv) {
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2367,9 +2559,16 @@ int llama_bench(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res = false;
+                if (!inst.model_draft.empty() && ctx_dft) {
+                    res = test_gen_spec(ctx, ctx_dft, 1, inst.spec_draft_n_max, t.n_threads);
+                } else {
+                    res = test_gen(ctx, 1, t.n_threads);
+                }
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2400,6 +2599,8 @@ int llama_bench(int argc, char ** argv) {
                     bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
                     if (!res) {
                         fprintf(stderr, "%s: error: failed to run depth\n", __func__);
+                        if (ctx_dft) llama_free(ctx_dft);
+                        if (lmodel_dft) llama_model_free(lmodel_dft);
                         llama_free(ctx);
                         llama_model_free(lmodel);
                         exit(1);
@@ -2427,6 +2628,8 @@ int llama_bench(int argc, char ** argv) {
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2437,9 +2640,16 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = false;
+                if (!inst.model_draft.empty() && ctx_dft) {
+                    res = test_gen_spec(ctx, ctx_dft, t.n_gen, inst.spec_draft_n_max, t.n_threads);
+                } else {
+                    res = test_gen(ctx, t.n_gen, t.n_threads);
+                }
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2461,6 +2671,15 @@ int llama_bench(int argc, char ** argv) {
         }
 
         llama_perf_context_print(ctx);
+
+        if (ctx_dft) {
+            llama_free(ctx_dft);
+            ctx_dft = nullptr;
+        }
+        if (lmodel_dft) {
+            llama_model_free(lmodel_dft);
+            lmodel_dft = nullptr;
+        }
 
         llama_free(ctx);
 
