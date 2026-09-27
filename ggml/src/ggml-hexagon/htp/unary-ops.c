@@ -739,6 +739,185 @@ static void snake_f32(const void * restrict src,
     }
 }
 
+static inline void hvx_sin_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t num_vectors        = ne0 / VLEN_FP32;
+    const uint32_t leftovers          = ne0 % VLEN_FP32;
+
+    for (uint32_t i = 0; i < num_vectors; i++) {
+        v_dst[i] = hvx_vec_sin_f32(v_src[i]);
+    }
+
+    if (leftovers) {
+        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
+        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        for (uint32_t i = 0; i < leftovers; i++) {
+            f_dst[i] = sinf(f_src[i]);
+        }
+    }
+}
+
+static void sin_f32(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_sin_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+static inline void hvx_cos_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t num_vectors        = ne0 / VLEN_FP32;
+    const uint32_t leftovers          = ne0 % VLEN_FP32;
+
+    for (uint32_t i = 0; i < num_vectors; i++) {
+        v_dst[i] = hvx_vec_cos_f32(v_src[i]);
+    }
+
+    if (leftovers) {
+        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
+        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        for (uint32_t i = 0; i < leftovers; i++) {
+            f_dst[i] = cosf(f_src[i]);
+        }
+    }
+}
+
+static void cos_f32(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_cos_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+static inline void hvx_hardsigmoid_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t num_vectors        = ne0 / VLEN_FP32;
+    const uint32_t leftovers          = ne0 % VLEN_FP32;
+    const HVX_Vector v_three          = hvx_vec_splat_f32(3.0f);
+    const HVX_Vector v_inv_six        = hvx_vec_splat_f32(1.0f / 6.0f);
+    const HVX_Vector v_zero           = hvx_vec_splat_f32(0.0f);
+    const HVX_Vector v_one            = hvx_vec_splat_f32(1.0f);
+
+    for (uint32_t i = 0; i < num_vectors; i++) {
+        HVX_Vector x_plus_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(v_src[i], v_three));
+        HVX_Vector scaled   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x_plus_3, v_inv_six));
+        HVX_Vector clamped  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmax_VsfVsf(v_zero, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmin_VsfVsf(v_one, scaled))));
+        v_dst[i]            = clamped;
+    }
+
+    if (leftovers) {
+        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
+        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        for (uint32_t i = 0; i < leftovers; i++) {
+            float v = (f_src[i] + 3.0f) / 6.0f;
+            f_dst[i] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        }
+    }
+}
+
+static void hardsigmoid_f32(const void * restrict src,
+                            void * restrict dst,
+                            const uint32_t num_rows,
+                            const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_hardsigmoid_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+static inline void hvx_hardswish_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t num_vectors        = ne0 / VLEN_FP32;
+    const uint32_t leftovers          = ne0 % VLEN_FP32;
+    const HVX_Vector v_three          = hvx_vec_splat_f32(3.0f);
+    const HVX_Vector v_inv_six        = hvx_vec_splat_f32(1.0f / 6.0f);
+    const HVX_Vector v_zero           = hvx_vec_splat_f32(0.0f);
+    const HVX_Vector v_one            = hvx_vec_splat_f32(1.0f);
+
+    for (uint32_t i = 0; i < num_vectors; i++) {
+        HVX_Vector x        = v_src[i];
+        HVX_Vector x_plus_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(x, v_three));
+        HVX_Vector scaled   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x_plus_3, v_inv_six));
+        HVX_Vector hsig     = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmax_VsfVsf(v_zero, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmin_VsfVsf(v_one, scaled))));
+        v_dst[i]            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x, hsig));
+    }
+
+    if (leftovers) {
+        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
+        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        for (uint32_t i = 0; i < leftovers; i++) {
+            float x = f_src[i];
+            float v = (x + 3.0f) / 6.0f;
+            float hsig = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            f_dst[i] = x * hsig;
+        }
+    }
+}
+
+static void hardswish_f32(const void * restrict src,
+                          void * restrict dst,
+                          const uint32_t num_rows,
+                          const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_hardswish_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+static inline void hvx_elu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0, float alpha) {
+    const float * restrict f_src = (const float *) src;
+    float * restrict f_dst       = (float *) dst;
+
+    for (uint32_t i = 0; i < ne0; i++) {
+        float x = f_src[i];
+        f_dst[i] = x > 0.0f ? x : alpha * (expf(x) - 1.0f);
+    }
+}
+
+static void elu_f32(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float alpha = 1.0f;
+    if (op_params[0] != 0) {
+        memcpy(&alpha, &op_params[0], sizeof(float));
+    }
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_elu_f32_aa(dst_local, src_local, ne0, alpha);
+    }
+}
+
 static void log_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -855,6 +1034,34 @@ static void tile_snake_f32(void * restrict dst, const void * restrict src, uint3
         memcpy(&alpha, &uctx->octx->op_params[0], sizeof(float));
     }
     hvx_snake_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw, alpha);
+}
+
+static void tile_sin_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_sin_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_cos_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_cos_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_hardsigmoid_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_hardsigmoid_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_hardswish_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_hardswish_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_elu_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    float alpha = 1.0f;
+    if (uctx->octx->op_params[0] != 0) {
+        memcpy(&alpha, &uctx->octx->op_params[0], sizeof(float));
+    }
+    hvx_elu_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw, alpha);
 }
 
 static void tri_apply_tile_f32(const void * restrict src, void * restrict dst,
@@ -1578,6 +1785,11 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_RELU:      op_type = "relu-f32";                                   break;
         case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
         case HTP_OP_UNARY_SNAKE:     op_type = "snake-f32";                                  break;
+        case HTP_OP_UNARY_SIN:       op_type = "sin-f32";                                    break;
+        case HTP_OP_UNARY_COS:       op_type = "cos-f32";                                    break;
+        case HTP_OP_UNARY_HARDSIGMOID: op_type = "hardsigmoid-f32";                          break;
+        case HTP_OP_UNARY_HARDSWISH: op_type = "hardswish-f32";                              break;
+        case HTP_OP_UNARY_ELU:       op_type = "elu-f32";                                    break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
         default:
@@ -1729,6 +1941,11 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_RELU:      compute_func = (void *) tile_relu_f32;           break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) tile_step_f32;           break;
             case HTP_OP_UNARY_SNAKE:     compute_func = (void *) tile_snake_f32;          break;
+            case HTP_OP_UNARY_SIN:       compute_func = (void *) tile_sin_f32;            break;
+            case HTP_OP_UNARY_COS:       compute_func = (void *) tile_cos_f32;            break;
+            case HTP_OP_UNARY_HARDSIGMOID: compute_func = (void *) tile_hardsigmoid_f32;  break;
+            case HTP_OP_UNARY_HARDSWISH: compute_func = (void *) tile_hardswish_f32;      break;
+            case HTP_OP_UNARY_ELU:       compute_func = (void *) tile_elu_f32;            break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tiled_tri_f32;
                 compute_func = (void *) tri_apply_tile_f32;
@@ -1776,6 +1993,11 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
             case HTP_OP_UNARY_SNAKE:     compute_func = (void *) snake_f32;               break;
+            case HTP_OP_UNARY_SIN:       compute_func = (void *) sin_f32;                 break;
+            case HTP_OP_UNARY_COS:       compute_func = (void *) cos_f32;                 break;
+            case HTP_OP_UNARY_HARDSIGMOID: compute_func = (void *) hardsigmoid_f32;       break;
+            case HTP_OP_UNARY_HARDSWISH: compute_func = (void *) hardswish_f32;           break;
+            case HTP_OP_UNARY_ELU:       compute_func = (void *) elu_f32;                 break;
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tri_f32;

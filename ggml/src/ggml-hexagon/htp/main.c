@@ -859,6 +859,11 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
         case HTP_OP_UNARY_SNAKE:
+        case HTP_OP_UNARY_SIN:
+        case HTP_OP_UNARY_COS:
+        case HTP_OP_UNARY_HARDSIGMOID:
+        case HTP_OP_UNARY_HARDSWISH:
+        case HTP_OP_UNARY_ELU:
         case HTP_OP_L2_NORM:
             return op_unary(octx);
 
@@ -911,6 +916,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_CONV1D:
             return op_conv1d(octx);
+
+        case HTP_OP_CONV_TRANSPOSE_1D:
+            return op_conv_transpose1d(octx);
 
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);

@@ -61,6 +61,11 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
         case HTP_OP_UNARY_SNAKE:
+        case HTP_OP_UNARY_SIN:
+        case HTP_OP_UNARY_COS:
+        case HTP_OP_UNARY_HARDSIGMOID:
+        case HTP_OP_UNARY_HARDSWISH:
+        case HTP_OP_UNARY_ELU:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
             return true;

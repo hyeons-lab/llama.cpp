@@ -176,5 +176,6 @@ int op_im2col(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
 int op_conv1d(struct htp_ops_context * octx);
+int op_conv_transpose1d(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

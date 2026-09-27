@@ -6419,6 +6419,18 @@ static bool ggml_hexagon_supported_im2col(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_conv_transpose_1d(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    GGML_UNUSED(sess);
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    return true;
+}
+
 static bool ggml_hexagon_supported_pad(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
@@ -6566,6 +6578,9 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SQR:             return HTP_OP_SQR;
         case GGML_OP_SQRT:            return HTP_OP_SQRT;
         case GGML_OP_LOG:             return HTP_OP_UNARY_LOG;
+        case GGML_OP_SIN:             return HTP_OP_UNARY_SIN;
+        case GGML_OP_COS:             return HTP_OP_UNARY_COS;
+        case GGML_OP_CONV_TRANSPOSE_1D: return HTP_OP_CONV_TRANSPOSE_1D;
         case GGML_OP_SOFT_MAX:        return HTP_OP_SOFTMAX;
         case GGML_OP_SSM_CONV:        return HTP_OP_SSM_CONV;
         case GGML_OP_GATED_DELTA_NET: return HTP_OP_GATED_DELTA_NET;
@@ -6593,6 +6608,9 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
                 case GGML_UNARY_OP_ABS:        return HTP_OP_UNARY_ABS;
                 case GGML_UNARY_OP_RELU:       return HTP_OP_UNARY_RELU;
                 case GGML_UNARY_OP_STEP:       return HTP_OP_UNARY_STEP;
+                case GGML_UNARY_OP_HARDSIGMOID: return HTP_OP_UNARY_HARDSIGMOID;
+                case GGML_UNARY_OP_HARDSWISH:  return HTP_OP_UNARY_HARDSWISH;
+                case GGML_UNARY_OP_ELU:        return HTP_OP_UNARY_ELU;
             default:
                 break;
             }
@@ -7631,6 +7649,8 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_LOG:
+        case GGML_OP_SIN:
+        case GGML_OP_COS:
             supp = ggml_hexagon_supported_unary(sess, op);
             break;
 
@@ -7663,6 +7683,9 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_ELU:
                     supp = ggml_hexagon_supported_unary(sess, op);
                     break;
                 default:
@@ -7724,6 +7747,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SSM_CONV:
             supp = ggml_hexagon_supported_ssm_conv(sess, op);
+            break;
+
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            supp = ggml_hexagon_supported_conv_transpose_1d(sess, op);
             break;
 
         case GGML_OP_IM2COL:

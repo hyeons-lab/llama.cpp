@@ -208,3 +208,98 @@ int op_conv1d(struct htp_ops_context * octx) {
 
     return HTP_STATUS_OK;
 }
+
+static void conv_transpose1d_worker_f32(unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    struct htp_conv1d_context * cctx = (struct htp_conv1d_context *) data;
+    struct htp_ops_context *    octx = cctx->octx;
+
+    const struct htp_tensor * weight = (octx->src[0]->ne[0] <= 128 && octx->src[1]->ne[0] > octx->src[0]->ne[0]) ? octx->src[0] : octx->src[1];
+    const struct htp_tensor * input  = (weight == octx->src[0]) ? octx->src[1] : octx->src[0];
+    const struct htp_tensor * src2   = octx->src[2];
+    const struct htp_tensor * dst    = octx->dst;
+
+    const uint32_t k_size = weight->ne[0];
+    const uint32_t c_out  = dst->ne[1];
+    const uint32_t c_in   = input->ne[1];
+    const uint32_t w_in   = input->ne[0];
+    const uint32_t w_out  = dst->ne[0];
+    const uint32_t n_in   = input->ne[2];
+
+    const uint32_t stride   = cctx->stride;
+    const uint32_t pad      = cctx->pad;
+    const uint32_t dilation = cctx->dilation;
+
+    const uint32_t cout_start = ith * cctx->cout_per_thread;
+    const uint32_t cout_end   = (cout_start + cctx->cout_per_thread < c_out) ?
+                                (cout_start + cctx->cout_per_thread) : c_out;
+
+    if (cout_start >= c_out) {
+        return;
+    }
+
+    const uint8_t * in_bytes     = (const uint8_t *) input->data;
+    const uint8_t * weight_bytes = (const uint8_t *) weight->data;
+    const uint8_t * bias_bytes   = src2 ? (const uint8_t *) src2->data : NULL;
+    uint8_t *       out_bytes    = (uint8_t *) dst->data;
+
+    for (uint32_t oc = cout_start; oc < cout_end; oc++) {
+        const float bias_val = bias_bytes ? *(const float *)(bias_bytes + oc * src2->nb[0]) : 0.0f;
+
+        for (uint32_t b = 0; b < n_in; b++) {
+            for (uint32_t ow = 0; ow < w_out; ow++) {
+                float sum = bias_val;
+
+                for (uint32_t ic = 0; ic < c_in; ic++) {
+                    for (uint32_t k = 0; k < k_size; k++) {
+                        int32_t in_numer = (int32_t) ow + (int32_t) pad - (int32_t)(k * dilation);
+                        if (in_numer < 0 || in_numer % (int32_t) stride != 0) {
+                            continue;
+                        }
+                        int32_t iw = in_numer / (int32_t) stride;
+                        if (iw >= (int32_t) w_in) {
+                            continue;
+                        }
+
+                        const float * in_p = (const float *)(in_bytes +
+                            (uint32_t) iw * input->nb[0] + ic * input->nb[1] + b * input->nb[2]);
+                        const float * wp   = (const float *)(weight_bytes +
+                            k * weight->nb[0] + oc * weight->nb[1] + ic * weight->nb[2]);
+
+                        sum += (*in_p) * (*wp);
+                    }
+                }
+
+                float * out_p = (float *)(out_bytes +
+                    ow * dst->nb[0] + oc * dst->nb[1] + b * dst->nb[2]);
+                *out_p = sum;
+            }
+        }
+    }
+}
+
+int op_conv_transpose1d(struct htp_ops_context * octx) {
+    if (octx->src[0]->type != HTP_TYPE_F32 || octx->src[1]->type != HTP_TYPE_F32) {
+        FARF(ERROR, "op_conv_transpose1d: unsupported data type (f32 required)");
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    uint32_t stride   = octx->op_params[0] > 0 ? (uint32_t) octx->op_params[0] : 1;
+    uint32_t pad      = (uint32_t) octx->op_params[1];
+    uint32_t dilation = octx->op_params[2] > 0 ? (uint32_t) octx->op_params[2] : 1;
+
+    const uint32_t c_out = octx->dst->ne[1];
+    const uint32_t n_threads = octx->ctx->n_threads > 0 ? octx->ctx->n_threads : 1;
+
+    struct htp_conv1d_context cctx;
+    cctx.octx            = octx;
+    cctx.stride          = stride;
+    cctx.pad             = pad;
+    cctx.dilation        = dilation;
+    cctx.groups          = 1;
+    cctx.cout_per_thread = (c_out + n_threads - 1) / n_threads;
+
+    work_queue_run(octx->ctx->work_queue, conv_transpose1d_worker_f32, &cctx, n_threads);
+
+    return HTP_STATUS_OK;
+}
