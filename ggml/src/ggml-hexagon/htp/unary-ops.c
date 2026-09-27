@@ -711,8 +711,8 @@ static inline void hvx_snake_f32_aa(uint8_t * restrict dst, const uint8_t * rest
     }
 
     if (leftovers) {
-        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
-        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        const float * restrict f_src = (const float *)src + num_vectors * VLEN_FP32;
+        float * restrict f_dst       = (float *)dst + num_vectors * VLEN_FP32;
         for (uint32_t i = 0; i < leftovers; i++) {
             float x = f_src[i];
             float s = sinf(alpha * x);
@@ -750,8 +750,8 @@ static inline void hvx_sin_f32_aa(uint8_t * restrict dst, const uint8_t * restri
     }
 
     if (leftovers) {
-        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
-        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        const float * restrict f_src = (const float *)src + num_vectors * VLEN_FP32;
+        float * restrict f_dst       = (float *)dst + num_vectors * VLEN_FP32;
         for (uint32_t i = 0; i < leftovers; i++) {
             f_dst[i] = sinf(f_src[i]);
         }
@@ -783,8 +783,8 @@ static inline void hvx_cos_f32_aa(uint8_t * restrict dst, const uint8_t * restri
     }
 
     if (leftovers) {
-        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
-        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        const float * restrict f_src = (const float *)src + num_vectors * VLEN_FP32;
+        float * restrict f_dst       = (float *)dst + num_vectors * VLEN_FP32;
         for (uint32_t i = 0; i < leftovers; i++) {
             f_dst[i] = cosf(f_src[i]);
         }
@@ -818,13 +818,13 @@ static inline void hvx_hardsigmoid_f32_aa(uint8_t * restrict dst, const uint8_t 
     for (uint32_t i = 0; i < num_vectors; i++) {
         HVX_Vector x_plus_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(v_src[i], v_three));
         HVX_Vector scaled   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x_plus_3, v_inv_six));
-        HVX_Vector clamped  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmax_VsfVsf(v_zero, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmin_VsfVsf(v_one, scaled))));
+        HVX_Vector clamped  = Q6_Vsf_vmax_VsfVsf(v_zero, Q6_Vsf_vmin_VsfVsf(v_one, scaled));
         v_dst[i]            = clamped;
     }
 
     if (leftovers) {
-        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
-        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        const float * restrict f_src = (const float *)src + num_vectors * VLEN_FP32;
+        float * restrict f_dst       = (float *)dst + num_vectors * VLEN_FP32;
         for (uint32_t i = 0; i < leftovers; i++) {
             float v = (f_src[i] + 3.0f) / 6.0f;
             f_dst[i] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
@@ -860,13 +860,13 @@ static inline void hvx_hardswish_f32_aa(uint8_t * restrict dst, const uint8_t * 
         HVX_Vector x        = v_src[i];
         HVX_Vector x_plus_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(x, v_three));
         HVX_Vector scaled   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x_plus_3, v_inv_six));
-        HVX_Vector hsig     = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmax_VsfVsf(v_zero, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmin_VsfVsf(v_one, scaled))));
+        HVX_Vector hsig     = Q6_Vsf_vmax_VsfVsf(v_zero, Q6_Vsf_vmin_VsfVsf(v_one, scaled));
         v_dst[i]            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x, hsig));
     }
 
     if (leftovers) {
-        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
-        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        const float * restrict f_src = (const float *)src + num_vectors * VLEN_FP32;
+        float * restrict f_dst       = (float *)dst + num_vectors * VLEN_FP32;
         for (uint32_t i = 0; i < leftovers; i++) {
             float x = f_src[i];
             float v = (x + 3.0f) / 6.0f;
