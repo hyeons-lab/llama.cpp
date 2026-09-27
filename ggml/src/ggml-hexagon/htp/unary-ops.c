@@ -13,6 +13,7 @@
 #include "hvx-exp.h"
 #include "hvx-sigmoid.h"
 #include "hvx-utils.h"
+#include "hvx-sin-cos.h"
 #include "unary-ops.h"
 
 #define GGML_COMMON_DECL_C
@@ -690,6 +691,54 @@ static void step_f32(const void * restrict src,
     }
 }
 
+static inline void hvx_snake_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t ne0, float alpha) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t num_vectors        = ne0 / VLEN_FP32;
+    const uint32_t leftovers          = ne0 % VLEN_FP32;
+    const float inv_alpha             = 1.0f / (alpha != 0.0f ? alpha : 1.0f);
+
+    const HVX_Vector v_alpha     = hvx_vec_splat_f32(alpha);
+    const HVX_Vector v_inv_alpha = hvx_vec_splat_f32(inv_alpha);
+
+    for (uint32_t i = 0; i < num_vectors; i++) {
+        HVX_Vector x    = v_src[i];
+        HVX_Vector ax   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x, v_alpha));
+        HVX_Vector s    = hvx_vec_sin_f32(ax);
+        HVX_Vector s2   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(s, s));
+        HVX_Vector term = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(s2, v_inv_alpha));
+        v_dst[i]        = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(x, term));
+    }
+
+    if (leftovers) {
+        const float * restrict f_src = (const float *)(src + num_vectors * VLEN_BYTES);
+        float * restrict f_dst       = (float *)(dst + num_vectors * VLEN_BYTES);
+        for (uint32_t i = 0; i < leftovers; i++) {
+            float x = f_src[i];
+            float s = sinf(alpha * x);
+            f_dst[i] = x + inv_alpha * (s * s);
+        }
+    }
+}
+
+static void snake_f32(const void * restrict src,
+                      void * restrict dst,
+                      const uint32_t num_rows,
+                      const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float alpha = 1.0f;
+    if (op_params[0] != 0) {
+        memcpy(&alpha, &op_params[0], sizeof(float));
+    }
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_snake_f32_aa(dst_local, src_local, ne0, alpha);
+    }
+}
+
 static void log_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -798,6 +847,14 @@ static void tile_relu_f32(void * restrict dst, const void * restrict src, uint32
 static void tile_step_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
     (void) uctx;
     hvx_step_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_snake_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    float alpha = 1.0f;
+    if (uctx->octx->op_params[0] != 0) {
+        memcpy(&alpha, &uctx->octx->op_params[0], sizeof(float));
+    }
+    hvx_snake_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw, alpha);
 }
 
 static void tri_apply_tile_f32(const void * restrict src, void * restrict dst,
@@ -1520,6 +1577,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_LOG:       op_type = is_f16 ? "log-f16"      : "log-f32";          break;
         case HTP_OP_UNARY_RELU:      op_type = "relu-f32";                                   break;
         case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
+        case HTP_OP_UNARY_SNAKE:     op_type = "snake-f32";                                  break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
         default:
@@ -1670,6 +1728,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_LOG:       compute_func = (void *) tile_log_f32;            break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) tile_relu_f32;           break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) tile_step_f32;           break;
+            case HTP_OP_UNARY_SNAKE:     compute_func = (void *) tile_snake_f32;          break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tiled_tri_f32;
                 compute_func = (void *) tri_apply_tile_f32;
@@ -1716,6 +1775,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f32;                 break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
+            case HTP_OP_UNARY_SNAKE:     compute_func = (void *) snake_f32;               break;
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tri_f32;

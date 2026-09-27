@@ -858,6 +858,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_SNAKE:
         case HTP_OP_L2_NORM:
             return op_unary(octx);
 
@@ -907,6 +908,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);
+
+        case HTP_OP_CONV1D:
+            return op_conv1d(octx);
 
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
