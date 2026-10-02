@@ -1,7 +1,7 @@
 // Dynamic quantizers that produce tiled activations
 
-// f32 -> f16 bits, round to nearest even, with subnormals. Plain integer code so it needs no
-// compiler runtime on the DSP.
+// f32 -> f16 bits, round to nearest even, with subnormals. Plain integer code, so these two helpers
+// need no compiler runtime on the DSP.
 static inline uint16_t htp_q8_f32_to_f16_bits(float f) {
     union { float f; uint32_t u; } v = { f };
     const uint32_t x    = v.u;
@@ -37,7 +37,7 @@ static inline uint16_t htp_q8_f32_to_f16_bits(float f) {
     return (uint16_t) (sign | r);
 }
 
-// f16 bits -> f32, for the non-negative finite scales produced above.
+// f16 bits -> f32, for the non-negative scales produced above (the sign bit is ignored).
 static inline float htp_q8_f16_bits_to_f32(uint16_t h) {
     const uint32_t e = (h >> 10) & 0x1fu;
     const uint32_t m = h & 0x3ffu;
@@ -54,8 +54,10 @@ static inline float htp_q8_f16_bits_to_f32(uint16_t h) {
 // expects them (group 0 in halfword lanes 0..31 of `vd01_hf`, group 1 in 32..63; groups 2 and 3
 // likewise in `vd23_hf`). `d_f32` returns the scales as f32.
 //
-// Each scale is rounded UP to f16 FIRST (the smallest f16 at least amax / 127) and the values are then
-// multiplied by the reciprocal of the ROUNDED scale (in f32), so the int8 values and the stored scale always describe the same numbers.
+// Each scale is rounded UP to f16 FIRST (the smallest f16 at least amax / 127) and the values are
+// then multiplied by the reciprocal of the ROUNDED scale (in f32), so the int8 values and the
+// stored scale always describe the same numbers. A block holding a NaN or infinity gets a NaN or
+// infinite scale and all-zero values, so the poison reaches the dot product.
 // The previous HVX path did this whole stage in f16, which breaks for blocks with a small maximum:
 // below about 7.7e-3 the scale is an f16 subnormal, and below about 2e-3 its reciprocal overflows
 // f16, so the values came out wrongly scaled (relative error of 50% or more).
@@ -74,7 +76,7 @@ static inline void htp_quantize_q8_stage(const float * restrict x, HVX_Vector * 
         // The stored scale is the smallest f16 at least amax / 127 (round UP, like the CPU
         // quantizers): rounding to nearest could land below it, and for an f16-subnormal scale
         // the largest element would then quantize past 127 and saturate.
-        const float    raw_d = mx[0] * (1.0f / 127.0f);
+        const float    raw_d = mx[0] / 127.0f;
         uint16_t       dh    = htp_q8_f32_to_f16_bits(raw_d);
         float          d     = htp_q8_f16_bits_to_f32(dh);
         if (d < raw_d && dh < 0x7c00u) {
@@ -89,7 +91,11 @@ static inline void htp_quantize_q8_stage(const float * restrict x, HVX_Vector * 
         for (int i = 0; i < 16; ++i) {
             dw[i] = w;
         }
-        vq_qf[g] = Q6_Vqf32_vsub_VsfVsf(hvx_vec_mul_f32_f32(vx[g], hvx_vec_splat_f32(inv)), zero);
+        // inv is 0 for a zero, NaN or infinite scale: force the values to 0 instead of letting a
+        // NaN or infinite lane convert to an arbitrary int8.
+        vq_qf[g] = inv != 0.0f ?
+                       Q6_Vqf32_vsub_VsfVsf(hvx_vec_mul_f32_f32(vx[g], hvx_vec_splat_f32(inv)), zero) :
+                       zero;
     }
 
     HVX_Vector vx01_hf = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vq_qf[1], vq_qf[0])));
